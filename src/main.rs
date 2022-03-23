@@ -104,12 +104,16 @@ fn main() -> Result<()> {
             let detected = find_rom_header(&mut f, metadata.len(), offset)?;
             let rom = detected.0;
             let romtype = detected.1;
+            let file_size_bytes = metadata.len();
 
             let as_json = json!({
                 "file": {
-                    "size_kbit": bytes_to_kbit(metadata.len()),
-                    "size_kbyte": metadata.len() / 1024,
                     "has_smc_header": has_smc_header,
+                    "size": {
+                        "bytes": file_size_bytes,
+                        "kilobits": bytes_to_kbit(file_size_bytes),
+                        "kilobytes": file_size_bytes / 1024
+                    },
                 },
                 "rom": {
                     "name": rom.name.trim_end_matches(" "),
