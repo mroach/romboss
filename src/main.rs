@@ -109,11 +109,7 @@ fn main() -> Result<()> {
             let as_json = json!({
                 "file": {
                     "has_smc_header": has_smc_header,
-                    "size": {
-                        "bytes": file_size_bytes,
-                        "kilobits": bytes_to_kbit(file_size_bytes),
-                        "kilobytes": file_size_bytes / 1024
-                    },
+                    "size": bytes_to_storage(file_size_bytes),
                 },
                 "rom": {
                     "name": rom.name.trim_end_matches(" "),
@@ -121,7 +117,8 @@ fn main() -> Result<()> {
                     "map_mode": map_mode_description(rom.map_mode),
                     "cartridge_type": cartridge_type_description(rom.cartridge_type),
                     "destination": destination_code_description(rom.destination_code),
-                    "size_kbyte": 2u64.pow(rom.rom_size.into())
+                    "rom_size": bytes_to_storage(2u64.pow(rom.rom_size.into()) * 1024),
+                    "sram_size": bytes_to_storage(2u64.pow(rom.sram_size.into()) * 1024),
                 }
             });
 
@@ -132,10 +129,22 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn bytes_to_kbit(len: u64) -> u64 {
-    const KBIT: u64 = 131072;
+#[derive(Serialize)]
+struct StorageSize {
+    bytes: u64,
+    kilobits: u64,
+    kilobytes: u64,
+}
 
-    len / KBIT
+fn bytes_to_storage(byte_len: u64) -> StorageSize {
+    const KBIT: u64 = 128;
+    const KBYTE: u64 = 1024;
+
+    StorageSize {
+        bytes: byte_len,
+        kilobits: byte_len / KBIT,
+        kilobytes: byte_len / KBYTE,
+    }
 }
 
 // Find a ROM header in the beginning of the file.
