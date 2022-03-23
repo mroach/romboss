@@ -105,8 +105,6 @@ fn main() -> Result<()> {
             let rom = detected.0;
             let romtype = detected.1;
 
-            println!("{:?}", rom);
-
             let as_json = json!({
                 "file": {
                     "size_kbit": bytes_to_kbit(metadata.len()),
