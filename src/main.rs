@@ -69,10 +69,6 @@ struct SnesRomHeader {
     checksum: u16,
 }
 
-const HEADER_START_LOROM: u64 = 0x7FB0;
-const HEADER_START_HIROM: u64 = 0xFFB0;
-const FIXED_VALUE_1: [u8; 7] = [0, 0, 0, 0, 0, 0, 0];
-
 #[derive(Serialize)]
 enum HeaderType {
     HiRom,
@@ -134,22 +130,36 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-const KBIT: u64 = 131072;
-
 fn bytes_to_kbit(len: u64) -> u64 {
+    const KBIT: u64 = 131072;
+
     len / KBIT
 }
 
+// Find a ROM header in the beginning of the file.
+// To avoid reading the file multiple times, wh
 fn find_rom_header(file: &mut File, size: u64, offset: u64) -> Result<(SnesRomHeader, HeaderType)> {
+    const HEADER_START_LOROM: u32 = 0x7FB0;
+    const HEADER_START_HIROM: u32 = 0xFFB0;
+    const HEADER_SIZE: u32 = 48;
+    const HEADER_BUFFER_SIZE: usize =
+        ((HEADER_START_HIROM - HEADER_START_LOROM) + HEADER_SIZE) as usize;
+
     let real_size = size - offset;
 
-    let mut rom = read_header_at(file, offset + HEADER_START_LOROM)?;
+    let start_looking_at = HEADER_START_LOROM as u64;
+    let mut buffer = [0; HEADER_BUFFER_SIZE];
+
+    file.seek(std::io::SeekFrom::Start(offset + start_looking_at))?;
+    file.read(&mut buffer).expect("failed to read buffer");
+
+    let mut rom = read_header_at(&buffer, HEADER_START_LOROM as u64 - start_looking_at)?;
     if header_checks_out(&rom, real_size) {
         return Ok((rom, HeaderType::LoRom));
     }
     debug!("Does not appear to be a LoRom: {:?}", rom);
 
-    rom = read_header_at(file, offset + HEADER_START_HIROM)?;
+    rom = read_header_at(&buffer, HEADER_START_HIROM as u64 - start_looking_at)?;
     if header_checks_out(&rom, real_size) {
         return Ok((rom, HeaderType::HiRom));
     }
@@ -159,30 +169,37 @@ fn find_rom_header(file: &mut File, size: u64, offset: u64) -> Result<(SnesRomHe
     bail!("Could not detect a valid header")
 }
 
+// Determines if the parsed header appears legitimate.
+//
+// The header tends to be in one of two places in the ROM file. A decent way to
+// check if you've read the right spot is by checking that the "fixed value"
+// gives you what you expect and that the "rom size" value matches the actual
+// size of the ROM on disk.
 fn header_checks_out(rom: &SnesRomHeader, real_size: u64) -> bool {
+    const FIXED_VALUE_1: [u8; 7] = [0, 0, 0, 0, 0, 0, 0];
+
     if rom.fixed_value != FIXED_VALUE_1 {
         debug!("fixed value was {:?}", rom.fixed_value);
-        return false
+        return false;
     }
 
     let calculated_size = 2u64.pow(rom.rom_size.into()) * 1024;
 
     if real_size == calculated_size {
-        return true
+        return true;
     }
 
-    debug!("calculated_size of {} does not match real size {}", calculated_size, real_size);
+    debug!(
+        "calculated_size of {} does not match real size {}",
+        calculated_size, real_size
+    );
 
     false
 }
 
-fn read_header_at(file: &mut File, offset: u64) -> Result<SnesRomHeader> {
-    let mut buffer = [0; 48];
-
-    file.seek(std::io::SeekFrom::Start(offset))?;
-    file.read(&mut buffer).expect("failed to read buffer");
-
+fn read_header_at(mut buffer: &[u8], offset: u64) -> Result<SnesRomHeader> {
     let mut cursor = Cursor::new(&mut buffer);
+    cursor.seek(binread::io::SeekFrom::Start(offset))?;
     let rom = SnesRomHeader::read(&mut cursor)?;
 
     Ok(rom)
