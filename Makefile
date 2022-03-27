@@ -1,6 +1,6 @@
 # Cross-compiling for Windows needs: mingw64-gcc, mingw64-winpthreads-static
 
-BIN_NAME = rombo
+BIN_NAME = romboss
 PREFIX = /opt/local
 
 WINDOWS_TARGETS = x86_64-pc-windows-gnu

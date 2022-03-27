@@ -1,5 +1,5 @@
 [package]
-name = "rombo"
+name = "romboss"
 version = "0.1.0"
 license = "MIT"
 authors = ["Michael Roach <git@c.mroach.com>"]

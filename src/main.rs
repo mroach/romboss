@@ -7,7 +7,7 @@ use std::path::PathBuf;
 mod platform;
 
 #[derive(Parser)]
-#[clap(name = "rombo")]
+#[clap(name = "romboss")]
 struct Cli {
     #[clap(subcommand)]
     command: Commands,
