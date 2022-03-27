@@ -25,6 +25,8 @@ enum Commands {
         #[clap(long = "platform", short = 'p', default_value = "auto", possible_values = ["auto", "snes", "sfc", "megadrive", "genesis"])]
         platform: String,
     },
+
+    Version {},
 }
 
 fn main() -> Result<()> {
@@ -33,6 +35,15 @@ fn main() -> Result<()> {
     let args = Cli::parse();
 
     match &args.command {
+        Commands::Version {} => {
+            const PKG_NAME: &str = env!("CARGO_PKG_NAME");
+            const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+            println!("{} v{}", PKG_NAME, PKG_VERSION);
+
+            Ok(())
+        }
+
         Commands::Info {
             path,
             output_format,
