@@ -65,6 +65,7 @@ fn main() -> Result<()> {
             match rom {
                 Rom::SuperNintendo(r) => print_serializable_rom(&r, output_format)?,
                 Rom::MegaDrive(r) => print_serializable_rom(&r, output_format)?,
+                Rom::NintendoDS(r) => print_serializable_rom(&r, output_format)?,
             };
             Ok(())
         }
@@ -88,6 +89,7 @@ where
 enum Rom {
     SuperNintendo(platform::snes::Rom),
     MegaDrive(platform::megadrive::Rom),
+    NintendoDS(platform::nds::Rom),
 }
 
 fn detect_rom_platform(path: &PathBuf) -> Option<Platform> {
@@ -99,6 +101,7 @@ fn detect_rom_platform(path: &PathBuf) -> Option<Platform> {
 #[derive(Debug)]
 enum Platform {
     MegaDrive,
+    NintendoDS,
     SuperNintendo,
 }
 
@@ -106,6 +109,7 @@ fn parse_platform_label(label: &str) -> Option<Platform> {
     match label {
         "snes" | "sfc" => return Some(Platform::SuperNintendo),
         "megadrive" | "genesis" => return Some(Platform::MegaDrive),
+        "ds" => return Some(Platform::NintendoDS),
         _ => None,
     }
 }
@@ -117,6 +121,7 @@ fn platform_from_path(path: &PathBuf) -> Option<Platform> {
     match ext {
         "smc" | "sfc" | "swc" => return Some(Platform::SuperNintendo),
         "gen" | "md" | "smd" => return Some(Platform::MegaDrive),
+        "nds" => return Some(Platform::NintendoDS),
         _ => None,
     }
 }
@@ -130,6 +135,10 @@ fn rom_from_file(path: &PathBuf, platform: Platform) -> Result<Rom> {
         Platform::MegaDrive => {
             let rom = platform::megadrive::rom_from_file(path)?;
             Ok(Rom::MegaDrive(rom))
+        }
+        Platform::NintendoDS => {
+            let rom = platform::nds::rom_from_file(path)?;
+            Ok(Rom::NintendoDS(rom))
         }
         val => bail!("Unsupported platform {:?}", val),
     }
