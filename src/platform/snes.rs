@@ -7,11 +7,30 @@ use log::debug;
 use phf::phf_map;
 use serde::Serialize;
 use std::fs::File;
+use std::path::PathBuf;
+
+#[derive(Serialize, Debug)]
+pub struct Rom {
+    map_mode: String,
+    cartridge_type: String,
+    target_market: String,
+    title: String,
+    has_smc_header: bool,
+    rom_size: StorageSize,
+    sram_size: StorageSize,
+}
+
+#[derive(Serialize, Debug)]
+pub struct StorageSize {
+    bytes: u32,
+    kilobytes: u32,
+    kilobits: u32,
+}
 
 #[derive(BinRead, Debug)]
 #[br(big)]
 #[allow(dead_code)]
-pub struct SnesRomHeader {
+pub struct RomHeader {
     #[br(count = 2)]
     maker_code: Vec<u8>,
 
@@ -25,13 +44,13 @@ pub struct SnesRomHeader {
     special_version: u8,
     cartridge_type: u8,
 
-    #[br(count = 21, try_map = |c: Vec<u8>| EUCJPEncoding.decode(&c[..], DecoderTrap::Ignore))]
-    pub name: String,
+    #[br(count = 21, try_map = |c: Vec<u8>| bytes_to_stripped_string(&c[..]))]
+    name: String,
 
     map_mode: u8,
-    pub rom_type: u8,
-    pub rom_size: u8,
-    pub sram_size: u8,
+    rom_type: u8,
+    rom_size: u8,
+    sram_size: u8,
 
     // 00: JP, 01: NA, 02: EU, 03: NORDIC, 04: FI, 05: DK, 06: FR, 07: NL, 08: ES
     // 09: DE, 0A: IT, 0B: CN, 0C: ID, 0D: KR, 0E: ?, 0F: CA, 10: BR, 11: AU, 12-14: ?
@@ -47,13 +66,13 @@ pub struct SnesRomHeader {
     checksum: u16,
 }
 
-#[derive(Serialize)]
-pub enum HeaderType {
-    HiRom,
-    LoRom,
+// Converts a series of bytes to a string using EUC-JP encoding and stripping trailing spaces.
+fn bytes_to_stripped_string(bytes: &[u8]) -> Result<String> {
+    let s = EUCJPEncoding.decode(&bytes, DecoderTrap::Ignore).unwrap();
+    Ok(s.trim_end().to_string())
 }
 
-impl SnesRomHeader {
+impl RomHeader {
     pub fn map_mode_description(&self) -> String {
         static MAP_MODES: phf::Map<u8, &'static str> = phf_map! {
             0x20u8 => "2.68MHz LoROM",
@@ -104,6 +123,14 @@ impl SnesRomHeader {
 
         lookup_description(self.destination_code, &DESTINATION_CODES)
     }
+
+    pub fn rom_size(&self) -> StorageSize {
+        kilobytes_to_storage(2u32.pow(self.rom_size as u32))
+    }
+
+    pub fn sram_size(&self) -> StorageSize {
+        kilobytes_to_storage(2u32.pow(self.sram_size as u32))
+    }
 }
 
 fn lookup_description(code: u8, map: &phf::Map<u8, &'static str>) -> String {
@@ -113,13 +140,53 @@ fn lookup_description(code: u8, map: &phf::Map<u8, &'static str>) -> String {
     }
 }
 
+pub fn rom_from_file(path: &PathBuf) -> Result<Rom> {
+    let metadata = std::fs::metadata(&path)?;
+    let mut offset = 0x00;
+    let mut has_smc_header = false;
+
+    match metadata.len() % 1024 {
+        0 => debug!("No SMC header present"),
+        512 => {
+            debug!("SMC header present");
+            offset = 0x0200;
+            has_smc_header = true;
+        }
+        x => panic!("Invalid file? rem 1024 is {}", x),
+    }
+
+    debug!("reading rom from file {:?}", &path);
+
+    let mut f = File::open(&path).unwrap();
+    let header = find_rom_header(&mut f, metadata.len(), offset)?;
+
+    Ok(rom_from_header(&header, has_smc_header))
+}
+
+fn rom_from_header(header: &RomHeader, has_smc_header: bool) -> Rom {
+    Rom {
+        map_mode: header.map_mode_description(),
+        cartridge_type: header.cartridge_type_description(),
+        target_market: header.destination_code_description(),
+        title: header.name.to_string(),
+        has_smc_header: has_smc_header,
+        rom_size: header.rom_size(),
+        sram_size: header.sram_size(),
+    }
+}
+
+// The header stores values in kilobytes, so "8" is 8 kB, or 8192 bytes.
+fn kilobytes_to_storage(kilobyte_len: u32) -> StorageSize {
+    StorageSize {
+        bytes: kilobyte_len * 1024,
+        kilobits: kilobyte_len * 8,
+        kilobytes: kilobyte_len,
+    }
+}
+
 // Find a ROM header in the beginning of the file.
 // To avoid reading the file multiple times, wh
-pub fn find_rom_header(
-    file: &mut File,
-    size: u64,
-    offset: u64,
-) -> Result<(SnesRomHeader, HeaderType)> {
+pub fn find_rom_header(file: &mut File, size: u64, offset: u64) -> Result<RomHeader> {
     const HEADER_START_LOROM: u32 = 0x7FB0;
     const HEADER_START_HIROM: u32 = 0xFFB0;
     const HEADER_SIZE: u32 = 48;
@@ -136,18 +203,18 @@ pub fn find_rom_header(
 
     let mut rom = read_header_at(&buffer, HEADER_START_LOROM as u64 - start_looking_at)?;
     if header_checks_out(&rom, real_size) {
-        return Ok((rom, HeaderType::LoRom));
+        return Ok(rom);
     }
     debug!("Does not appear to be a LoRom: {:?}", rom);
 
     rom = read_header_at(&buffer, HEADER_START_HIROM as u64 - start_looking_at)?;
     if header_checks_out(&rom, real_size) {
-        return Ok((rom, HeaderType::HiRom));
+        return Ok(rom);
     }
 
     debug!("Does not appear to be a HiRom: {:?}", rom);
 
-    bail!("Could not detect a valid header")
+    bail!("Could not detect a valid header. This may not be a valid Super Nintendo ROM.")
 }
 
 // Determines if the parsed header appears legitimate.
@@ -156,7 +223,7 @@ pub fn find_rom_header(
 // check if you've read the right spot is by checking that the "fixed value"
 // gives you what you expect and that the "rom size" value matches the actual
 // size of the ROM on disk.
-fn header_checks_out(rom: &SnesRomHeader, real_size: u64) -> bool {
+fn header_checks_out(rom: &RomHeader, real_size: u64) -> bool {
     const FIXED_VALUE_1: [u8; 7] = [0, 0, 0, 0, 0, 0, 0];
 
     if rom.fixed_value != FIXED_VALUE_1 {
@@ -178,10 +245,10 @@ fn header_checks_out(rom: &SnesRomHeader, real_size: u64) -> bool {
     false
 }
 
-fn read_header_at(mut buffer: &[u8], offset: u64) -> Result<SnesRomHeader> {
+fn read_header_at(mut buffer: &[u8], offset: u64) -> Result<RomHeader> {
     let mut cursor = Cursor::new(&mut buffer);
     cursor.seek(binread::io::SeekFrom::Start(offset))?;
-    let rom = SnesRomHeader::read(&mut cursor)?;
+    let rom = RomHeader::read(&mut cursor)?;
 
     Ok(rom)
 }

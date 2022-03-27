@@ -1,14 +1,10 @@
-use std::path::PathBuf;
-
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use env_logger;
-use log::{debug, info};
 use serde::Serialize;
-use serde_json::json;
-use std::fs::File;
+use std::path::PathBuf;
 
-mod snes;
+mod platform;
 
 #[derive(Parser)]
 #[clap(name = "rombo")]
@@ -23,8 +19,11 @@ enum Commands {
         #[clap(required = true, parse(from_os_str))]
         path: PathBuf,
 
-        #[clap(long = "output", short = 'o', default_value = "json", possible_values = ["json", "xml"])]
-        output: String,
+        #[clap(long = "output", short = 'o', default_value = "json", possible_values = ["json", "yaml"])]
+        output_format: String,
+
+        #[clap(long = "platform", short = 'p', default_value = "auto", possible_values = ["auto", "snes", "sfc", "megadrive", "genesis"])]
+        platform: String,
     },
 }
 
@@ -34,68 +33,93 @@ fn main() -> Result<()> {
     let args = Cli::parse();
 
     match &args.command {
-        Commands::Info { path, output: _ } => {
-            let metadata = std::fs::metadata(&path)
-                .with_context(|| format!("failed to read file metadata of `{:?}`", &path))?;
+        Commands::Info {
+            path,
+            output_format,
+            platform: platform_label,
+        } => {
+            let platform = match platform_label.as_str() {
+                "auto" => detect_rom_platform(&path).context(concat!(
+                    "Could not automatically determine the platform.",
+                    "Use the '-p' flag to specify a platform explicitly"
+                ))?,
+                other => parse_platform_label(other)
+                    .with_context(|| format!("Unrecognised platform label '{}'", other))?,
+            };
 
-            let mut offset = 0x00;
-            let mut has_smc_header = false;
+            let rom = rom_from_file(&path, platform)?;
 
-            match metadata.len() % 1024 {
-                0 => info!("No SMC header present"),
-                512 => {
-                    info!("SMC header present");
-                    offset = 0x0200;
-                    has_smc_header = true;
-                }
-                x => panic!("Invalid file? rem 1024 is {}", x),
-            }
-
-            debug!("reading file {:?}", &path);
-
-            let mut f = File::open(&path).unwrap();
-            let detected = snes::find_rom_header(&mut f, metadata.len(), offset)?;
-            let rom = detected.0;
-            let romtype = detected.1;
-            let file_size_bytes = metadata.len();
-
-            let as_json = json!({
-                "file": {
-                    "has_smc_header": has_smc_header,
-                    "size": bytes_to_storage(file_size_bytes),
-                },
-                "rom": {
-                    "name": rom.name.trim_end_matches(" "),
-                    "type": romtype,
-                    "map_mode": rom.map_mode_description(),
-                    "cartridge_type": rom.cartridge_type_description(),
-                    "destination": rom.destination_code_description(),
-                    "rom_size": bytes_to_storage(2u64.pow(rom.rom_size.into()) * 1024),
-                    "sram_size": bytes_to_storage(2u64.pow(rom.sram_size.into()) * 1024),
-                }
-            });
-
-            println!("{}", serde_json::to_string_pretty(&as_json)?);
+            // TODO: This is obviously redundant and should be solvable with generics or however
+            // Rust might let you say "here's something that implements this trait" (Serialize).
+            match rom {
+                Rom::SuperNintendo(r) => print_serializable_rom(&r, output_format)?,
+                Rom::MegaDrive(r) => print_serializable_rom(&r, output_format)?,
+            };
+            Ok(())
         }
+    }
+}
+
+fn print_serializable_rom<T>(rom: &T, format: &str) -> Result<()>
+where
+    T: Serialize,
+{
+    match format {
+        "json" => println!("{}", serde_json::to_string_pretty(&rom)?),
+        "yaml" => println!("{}", serde_yaml::to_string(&rom)?),
+        fmt => bail!("Unsupported format {}", fmt),
     }
 
     Ok(())
 }
 
-#[derive(Serialize)]
-struct StorageSize {
-    bytes: u64,
-    kilobits: u64,
-    kilobytes: u64,
+#[derive(Serialize, Debug)]
+enum Rom {
+    SuperNintendo(platform::snes::Rom),
+    MegaDrive(platform::megadrive::Rom),
 }
 
-fn bytes_to_storage(byte_len: u64) -> StorageSize {
-    const KBIT: u64 = 128;
-    const KBYTE: u64 = 1024;
+fn detect_rom_platform(path: &PathBuf) -> Option<Platform> {
+    // For now, only detect from the path.
+    // A future enhancement may be detecting based on file contents, like mime magic.
+    platform_from_path(path)
+}
 
-    StorageSize {
-        bytes: byte_len,
-        kilobits: byte_len / KBIT,
-        kilobytes: byte_len / KBYTE,
+#[derive(Debug)]
+enum Platform {
+    MegaDrive,
+    SuperNintendo,
+}
+
+fn parse_platform_label(label: &str) -> Option<Platform> {
+    match label {
+        "snes" | "sfc" => return Some(Platform::SuperNintendo),
+        "megadrive" | "genesis" => return Some(Platform::MegaDrive),
+        _ => None,
+    }
+}
+
+fn platform_from_path(path: &PathBuf) -> Option<Platform> {
+    let ext = path.extension().unwrap().to_ascii_lowercase();
+    let ext = ext.to_str().unwrap();
+
+    match ext {
+        "smc" | "sfc" | "swc" => return Some(Platform::SuperNintendo),
+        "gen" | "md" | "smd" => return Some(Platform::MegaDrive),
+        _ => None,
+    }
+}
+
+fn rom_from_file(path: &PathBuf, platform: Platform) -> Result<Rom> {
+    match platform {
+        Platform::SuperNintendo => {
+            let rom = platform::snes::rom_from_file(path)?;
+            Ok(Rom::SuperNintendo(rom))
+        }
+        Platform::MegaDrive => {
+            let rom = platform::megadrive::rom_from_file(path)?;
+            Ok(Rom::MegaDrive(rom))
+        }
+        val => bail!("Unsupported platform {:?}", val),
     }
 }
